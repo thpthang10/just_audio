@@ -1,13 +1,19 @@
 package com.ryanheise.just_audio;
 
+import android.Manifest;
+import android.app.Activity;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.media.audiofx.AudioEffect;
 import android.media.audiofx.Equalizer;
+import android.media.audiofx.Visualizer;
 import android.media.audiofx.LoudnessEnhancer;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.DefaultLivePlaybackSpeedControl;
 import com.google.android.exoplayer2.DefaultLoadControl;
@@ -47,8 +53,6 @@ import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.Util;
 import io.flutter.Log;
 import io.flutter.plugin.common.BinaryMessenger;
-import io.flutter.plugin.common.EventChannel;
-import io.flutter.plugin.common.EventChannel.EventSink;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
@@ -88,6 +92,11 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     private IcyHeaders icyHeaders;
     private int errorCount;
     private AudioAttributes pendingAudioAttributes;
+    private BetterVisualizer visualizer;
+    private boolean enableWaveform;
+    private boolean enableFft;
+    private Integer visualizerCaptureRate;
+    private Integer visualizerCaptureSize;
     private LoadControl loadControl;
     private boolean offloadSchedulingEnabled;
     private LivePlaybackSpeedControl livePlaybackSpeedControl;
@@ -146,6 +155,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         methodChannel.setMethodCallHandler(this);
         eventChannel = new BetterEventChannel(messenger, "com.ryanheise.just_audio.events." + id);
         dataEventChannel = new BetterEventChannel(messenger, "com.ryanheise.just_audio.data." + id);
+        visualizer = new BetterVisualizer(messenger, id);
         processingState = ProcessingState.none;
         if (audioLoadConfiguration != null) {
             Map<?, ?> loadControlMap = (Map<?, ?>)audioLoadConfiguration.get("androidLoadControl");
@@ -190,6 +200,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         } else {
             this.audioSessionId = audioSessionId;
         }
+        visualizer.onAudioSessionId(this.audioSessionId);
         clearAudioEffects();
         if (this.audioSessionId != null) {
             for (Object rawAudioEffect : rawAudioEffects) {
@@ -414,6 +425,26 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
         try {
             switch (call.method) {
+            case "startVisualizer":
+                Boolean enableWaveform = call.argument("enableWaveform");
+                Boolean enableFft = call.argument("enableFft");
+                Integer captureRate = call.argument("captureRate");
+                Integer captureSize = call.argument("captureSize");
+                this.enableWaveform = enableWaveform;
+                this.enableFft = enableFft;
+                visualizerCaptureRate = captureRate;
+                visualizerCaptureSize = captureSize;
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    result.error("Error: RECORD_AUDIO permission required", null, null);
+                    return;
+                }
+                visualizer.start(visualizerCaptureRate, visualizerCaptureSize, enableWaveform, enableFft);
+                result.success(new HashMap<String, Object>());
+                break;
+            case "stopVisualizer":
+                visualizer.stop();
+                result.success(new HashMap<String, Object>());
+                break;
             case "load":
                 Long initialPosition = getLong(call.argument("initialPosition"));
                 Integer initialIndex = call.argument("initialIndex");
@@ -1030,6 +1061,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             processingState = ProcessingState.none;
             broadcastImmediatePlaybackEvent();
         }
+        visualizer.dispose();
         eventChannel.endOfStream();
         dataEventChannel.endOfStream();
     }
